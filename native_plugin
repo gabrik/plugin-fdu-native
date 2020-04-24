@@ -250,17 +250,19 @@ class Native(RuntimePluginFDU):
             fdu_uuid = fdu.get_fdu_id()
             self.os.remove_file(fdu.outfile)
             native_dir = os.path.join(self.BASE_DIR, self.STORE_DIR, fdu_uuid, fdu.name)
-            self.os.remove_dir(native_dir)
+            self.logger.info('configure_fdu()', '[ INFO ] Native Plugin - Removing dir {}'.format(native_dir))
+            cmd = 'rm -rf {}'.format(native_dir)
+            self.os.execute_command(cmd, blocking=True, external=True)
 
             fdu.on_clean()
             self.current_fdus.update({instance_uuid: fdu})
             self.update_fdu_status(fdu_uuid, instance_uuid, 'DEFINE')
 
             self.logger.info('configure_fdu()', '[ INFO ] Native Plugin - Unregistering blocking run/log/ls/file evals for {}'.format(instance_uuid))
-            self.connector.local.actual.remove_plugin_fdu_run_eval(self.node, self.uuid, fdu_uuid, instance_uuid)
-            self.connector.local.actual.remove_plugin_fdu_log_eval(self.node, self.uuid, fdu_uuid, instance_uuid)
-            self.connector.local.actual.remove_plugin_fdu_ls_eval(self.node, self.uuid, fdu_uuid, instance_uuid)
-            self.connector.local.actual.remove_plugin_fdu_file_eval(self.node, self.uuid, fdu_uuid, instance_uuid)
+            self.connector.loc.actual.remove_plugin_fdu_run_eval(self.node, self.uuid, fdu_uuid, instance_uuid)
+            self.connector.loc.actual.remove_plugin_fdu_log_eval(self.node, self.uuid, fdu_uuid, instance_uuid)
+            self.connector.loc.actual.remove_plugin_fdu_ls_eval(self.node, self.uuid, fdu_uuid, instance_uuid)
+            self.connector.loc.actual.remove_plugin_fdu_file_eval(self.node, self.uuid, fdu_uuid, instance_uuid)
 
             self.logger.info('clean_fdu()', '[ DONE ] Native Plugin - Clean BE uuid {}'.format(instance_uuid))
 
@@ -647,7 +649,7 @@ class Native(RuntimePluginFDU):
             else:
                 self.logger.info('get_log_fdu()', 'Native Plugin - FDU is {}'.format(fdu))
                 fdu_uuid = fdu.get_fdu_id()
-                out = open(fdu.out_file)
+                out = open(fdu.outfile)
                 data = out.read()
                 out.close()
                 return {'result': data}

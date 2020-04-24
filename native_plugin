@@ -218,11 +218,17 @@ class Native(RuntimePluginFDU):
             self.current_fdus.update({instance_uuid: fdu})
             self.update_fdu_status(fdu_uuid, instance_uuid, 'CONFIGURE')
 
-            self.logger.info('configure_fdu()', '[ INFO ] Native Plugin - Registreting blocking run eval for {}'.format(instance_uuid))
+            self.logger.info('configure_fdu()', '[ INFO ] Native Plugin - Registreting blocking run/log/ls/file evals for {}'.format(instance_uuid))
             run_fun  = partial(self.run_blocking_fdu, instance_uuid)
-            self.logger.info('configure_fdu()', '[ INFO ] Native Plugin - Partial function created')
+            log_fun  = partial(self.get_log_fdu, instance_uuid)
+            ls_fun  = partial(self.get_ls_fdu, instance_uuid)
+            file_fun  = partial(self.get_file_fdu, instance_uuid)
+
             try:
                 self.connector.loc.actual.add_plugin_fdu_run_eval(self.node, self.uuid, fdu_uuid, instance_uuid, run_fun)
+                self.connector.loc.actual.add_plugin_fdu_log_eval(self.node, self.uuid, fdu_uuid, instance_uuid, log_fun)
+                self.connector.loc.actual.add_plugin_fdu_ls_eval(self.node, self.uuid, fdu_uuid, instance_uuid, ls_fun)
+                self.connector.loc.actual.add_plugin_fdu_file_eval(self.node, self.uuid, fdu_uuid, instance_uuid, file_fun)
             except Exception as e:
                 self.logger.error('configure_fdu()', '[ ERRO ] Native Plugin - Error in registering run function: {}'.format(e))
                 traceback.print_exc()
@@ -250,8 +256,11 @@ class Native(RuntimePluginFDU):
             self.current_fdus.update({instance_uuid: fdu})
             self.update_fdu_status(fdu_uuid, instance_uuid, 'DEFINE')
 
-            self.logger.info('configure_fdu()', '[ INFO ] Native Plugin - Unregistering blocking run eval for {}'.format(instance_uuid))
+            self.logger.info('configure_fdu()', '[ INFO ] Native Plugin - Unregistering blocking run/log/ls/file evals for {}'.format(instance_uuid))
             self.connector.local.actual.remove_plugin_fdu_run_eval(self.node, self.uuid, fdu_uuid, instance_uuid)
+            self.connector.local.actual.remove_plugin_fdu_log_eval(self.node, self.uuid, fdu_uuid, instance_uuid)
+            self.connector.local.actual.remove_plugin_fdu_ls_eval(self.node, self.uuid, fdu_uuid, instance_uuid)
+            self.connector.local.actual.remove_plugin_fdu_file_eval(self.node, self.uuid, fdu_uuid, instance_uuid)
 
             self.logger.info('clean_fdu()', '[ DONE ] Native Plugin - Clean BE uuid {}'.format(instance_uuid))
 
@@ -620,6 +629,91 @@ class Native(RuntimePluginFDU):
             na_script = na_script.render(path=p,command=cmd, outfile=outfile)
         return na_script
 
+
+    def get_log_fdu(self, instance_uuid, unit):
+        try:
+            self.logger.info('get_log_fdu()', ' Native Plugin - Running BE uuid {}'.format(instance_uuid))
+            fdu = self.current_fdus.get(instance_uuid, None)
+            if fdu is None:
+                self.logger.error('get_log_fdu()', 'Native Plugin - FDU not exists')
+                return {'error': 'FDU not exists'}
+                # raise FDUNotExistingException('FDU not existing',
+                #                                  'FDU {} not in runtime {}'.format(instance_uuid, self.uuid))
+            elif fdu.get_status() != State.CONFIGURED:
+                self.logger.error('get_log_fdu()', 'Native Plugin - FDU state is wrong, or transition not allowed')
+                return {'error': 'FDU is not in CONFIGURED state'}
+                # raise StateTransitionNotAllowedException('FDU is not in CONFIGURED state',
+                #                                          'FDU {} is not in CONFIGURED state'.format(instance_uuid))
+            else:
+                self.logger.info('get_log_fdu()', 'Native Plugin - FDU is {}'.format(fdu))
+                fdu_uuid = fdu.get_fdu_id()
+                out = open(fdu.out_file)
+                data = out.read()
+                out.close()
+                return {'result': data}
+
+        except Exception as e:
+            self.logger.info('get_log_fdu()', '[ ERRO ] Native Plugin - Error: {}'.format(e))
+            traceback.print_exc()
+            return {'error':'{}'.format(e)}
+
+    def get_ls_fdu(self, instance_uuid, unit):
+        try:
+            self.logger.info('get_ls_fdu()', ' Native Plugin - Running BE uuid {}'.format(instance_uuid))
+            fdu = self.current_fdus.get(instance_uuid, None)
+            if fdu is None:
+                self.logger.error('get_ls_fdu()', 'Native Plugin - FDU not exists')
+                return {'error': 'FDU not exists'}
+                # raise FDUNotExistingException('FDU not existing',
+                #                                  'FDU {} not in runtime {}'.format(instance_uuid, self.uuid))
+            elif fdu.get_status() != State.CONFIGURED:
+                self.logger.error('get_ls_fdu()', 'Native Plugin - FDU state is wrong, or transition not allowed')
+                return {'error': 'FDU is not in CONFIGURED state'}
+                # raise StateTransitionNotAllowedException('FDU is not in CONFIGURED state',
+                #                                          'FDU {} is not in CONFIGURED state'.format(instance_uuid))
+            else:
+                self.logger.info('get_ls_fdu()', 'Native Plugin - FDU is {}'.format(fdu))
+                fdu_uuid = fdu.get_fdu_id()
+                native_dir = os.path.join(self.BASE_DIR, self.STORE_DIR, fdu_uuid, fdu.name)
+
+                res = json.dumps(os.listdir(native_dir))
+                return {'result': res}
+
+        except Exception as e:
+            self.logger.info('get_ls_fdu()', '[ ERRO ] Native Plugin - Error: {}'.format(e))
+            traceback.print_exc()
+            return {'error':'{}'.format(e)}
+
+    def get_file_fdu(self, instance_uuid, filename):
+        try:
+            self.logger.info('get_ls_fdu()', ' Native Plugin - Running BE uuid {}'.format(instance_uuid))
+            fdu = self.current_fdus.get(instance_uuid, None)
+            if fdu is None:
+                self.logger.error('get_ls_fdu()', 'Native Plugin - FDU not exists')
+                return {'error': 'FDU not exists'}
+                # raise FDUNotExistingException('FDU not existing',
+                #                                  'FDU {} not in runtime {}'.format(instance_uuid, self.uuid))
+            elif fdu.get_status() != State.CONFIGURED:
+                self.logger.error('get_ls_fdu()', 'Native Plugin - FDU state is wrong, or transition not allowed')
+                return {'error': 'FDU is not in CONFIGURED state'}
+                # raise StateTransitionNotAllowedException('FDU is not in CONFIGURED state',
+                #                                          'FDU {} is not in CONFIGURED state'.format(instance_uuid))
+            else:
+                self.logger.info('get_ls_fdu()', 'Native Plugin - FDU is {}'.format(fdu))
+                fdu_uuid = fdu.get_fdu_id()
+                native_dir = os.path.join(self.BASE_DIR, self.STORE_DIR, fdu_uuid, fdu.name)
+                if os.path.exists(os.path.join(native_dir, filename)) and os.path.isfile(os.path.join(native_dir, filename)):
+                    out = open(os.path.join(native_dir, filename))
+                    data = out.read()
+                    out.close()
+                    return {'result': data}
+                else:
+                    return {'error':'file not exists or is directory'}
+
+        except Exception as e:
+            self.logger.info('get_ls_fdu()', '[ ERRO ] Native Plugin - Error: {}'.format(e))
+            traceback.print_exc()
+            return {'error':'{}'.format(e)}
 
     def __fdu_observer(self, fdu_info):
         self.logger.info('__fdu_observer()', ' Native Plugin - New Action of a FDU - FDU Info: {}'.format(fdu_info))

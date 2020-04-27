@@ -218,13 +218,15 @@ class Native(RuntimePluginFDU):
             self.current_fdus.update({instance_uuid: fdu})
             self.update_fdu_status(fdu_uuid, instance_uuid, 'CONFIGURE')
 
-            self.logger.info('configure_fdu()', '[ INFO ] Native Plugin - Registreting blocking run/log/ls/file evals for {}'.format(instance_uuid))
+            self.logger.info('configure_fdu()', '[ INFO ] Native Plugin - Registreting blocking start/run/log/ls/file evals for {}'.format(instance_uuid))
+            start_fun  = partial(self.start_fdu, instance_uuid)
             run_fun  = partial(self.run_blocking_fdu, instance_uuid)
             log_fun  = partial(self.get_log_fdu, instance_uuid)
             ls_fun  = partial(self.get_ls_fdu, instance_uuid)
             file_fun  = partial(self.get_file_fdu, instance_uuid)
 
             try:
+                self.connector.loc.actual.add_plugin_fdu_start_eval(self.node, self.uuid, fdu_uuid, instance_uuid, start_fun)
                 self.connector.loc.actual.add_plugin_fdu_run_eval(self.node, self.uuid, fdu_uuid, instance_uuid, run_fun)
                 self.connector.loc.actual.add_plugin_fdu_log_eval(self.node, self.uuid, fdu_uuid, instance_uuid, log_fun)
                 self.connector.loc.actual.add_plugin_fdu_ls_eval(self.node, self.uuid, fdu_uuid, instance_uuid, ls_fun)
@@ -258,7 +260,8 @@ class Native(RuntimePluginFDU):
             self.current_fdus.update({instance_uuid: fdu})
             self.update_fdu_status(fdu_uuid, instance_uuid, 'DEFINE')
 
-            self.logger.info('configure_fdu()', '[ INFO ] Native Plugin - Unregistering blocking run/log/ls/file evals for {}'.format(instance_uuid))
+            self.logger.info('configure_fdu()', '[ INFO ] Native Plugin - Unregistering blocking start/run/log/ls/file evals for {}'.format(instance_uuid))
+            self.connector.loc.actual.remove_plugin_fdu_start_eval(self.node, self.uuid, fdu_uuid, instance_uuid)
             self.connector.loc.actual.remove_plugin_fdu_run_eval(self.node, self.uuid, fdu_uuid, instance_uuid)
             self.connector.loc.actual.remove_plugin_fdu_log_eval(self.node, self.uuid, fdu_uuid, instance_uuid)
             self.connector.loc.actual.remove_plugin_fdu_ls_eval(self.node, self.uuid, fdu_uuid, instance_uuid)
@@ -340,11 +343,105 @@ class Native(RuntimePluginFDU):
             self.logger.info('run_fdu()', '[ DONE ] Native Plugin - Running BE uuid {}'.format(instance_uuid))
             return True
 
+    def start_fdu(self, instance_uuid, env):
+        self.logger.info('start_fdu()', ' Native Plugin - Starting BE uuid {}'.format(instance_uuid))
+        self.logger.info('start_fdu()', ' Native Plugin - Environment {}'.format(env))
+
+        #  env is expected in format MYVAR=MYVALUE,MYVAR2=MYVALUE2,...
+        #  converting to dictionary
+        env = env.split(',')
+        d_env = {}
+        for e in env:
+            ev = e.split('=')
+            k = ev[0]
+            v = ev[1]
+            d_env.update({k:v})
+
+        fdu = self.current_fdus.get(instance_uuid, None)
+        if fdu is None:
+            self.logger.error('start_fdu()', 'Native Plugin - FDU not exists')
+            return {'error': 'FDU not exists'}
+        elif fdu.get_status() != State.CONFIGURED:
+            self.logger.error('start_fdu()', 'Native Plugin - FDU state is wrong, or transition not allowed')
+            return {'error': 'FDU is not in CONFIGURED state'}
+        else:
+            self.logger.info('start_fdu()', 'Native Plugin - FDU is {}'.format(fdu))
+            fdu_uuid = fdu.get_fdu_id()
+            if fdu.source is not None:
+                native_dir = os.path.join(self.BASE_DIR, self.STORE_DIR, fdu_uuid, fdu.name)
+                source_dir = os.path.join(self.BASE_DIR, self.STORE_DIR, fdu_uuid, fdu.name)
+                pid_file = os.path.join(self.BASE_DIR, self.STORE_DIR, fdu_uuid, fdu.name, instance_uuid)
+                run_script = self.__generate_run_script(fdu.cmd, fdu.args, source_dir, pid_file)
+                if self.operating_system.lower() == 'linux':
+                    self.os.store_file(run_script, native_dir, '{}_run.sh'.format(instance_uuid))
+                    chmod_cmd = 'chmod +x {}'.format(os.path.join(native_dir, '{}_run.sh'.format(instance_uuid)))
+                    self.os.execute_command(chmod_cmd, blocking=True, external=False)
+                    cmd = '{}'.format(os.path.join(native_dir, '{}_run.sh'.format(instance_uuid)))
+                elif self.operating_system.lower() == 'windows':
+                    self.os.store_file(run_script, native_dir, '{}_run.ps1'.format(instance_uuid))
+                    cmd = '{}'.format(os.path.join(native_dir, '{}_run.ps1'.format(instance_uuid)))
+                else:
+                    cmd = ''
+                process = self.__execute_command(cmd, fdu.outfile, d_env)
+                time.sleep(1)
+                pid_file = '{}.pid'.format(pid_file)
+                # pid_file = os.path.join(self.BASE_DIR, self.STORE_DIR, fdu_uuid, fdu.name, pid_file)
+                pid = int(self.os.read_file(pid_file))
+                fdu.on_start(pid, process)
+            else:
+                # try to inject the pid file if script use {{pid_file}}
+                '''
+                This make possible to add on the launch file of you native application that fog05 can inject the pid output file
+                in this way is possible to fog05 to correct send signal to your application, in the case the {{pid_file}} is not defined the script
+                will not be modified
+                '''
+                if self.operating_system.lower() == 'linux':
+                        native_dir = os.path.join(self.BASE_DIR, self.STORE_DIR, fdu_uuid, fdu.name)
+                        f_name = '{}_run.sh'.format(instance_uuid)
+                        pid_file = os.path.join(self.BASE_DIR, self.STORE_DIR, fdu_uuid, fdu.name, instance_uuid)
+                        template_xml = self.os.read_file(os.path.join(self.DIR, 'templates', 'run_native_unix2.sh'))
+                        na_script = Environment().from_string(template_xml)
+                        cmd = '{} {}'.format(fdu.cmd, ' '.join(fdu.args))
+                        na_script = na_script.render(command=cmd, outfile=pid_file, path=native_dir)
+                        self.logger.info('start_fdu()', '[ INFO ] Lenght of runscript is {}'.format(len(na_script)))
+                        self.os.store_file(na_script, native_dir, f_name)
+                        chmod_cmd = 'chmod +x {}'.format(os.path.join(native_dir, f_name))
+                        self.os.execute_command(chmod_cmd, blocking=True, external=False)
+                        cmd = '{}'.format(os.path.join(native_dir, f_name))
+
+                elif self.operating_system.lower() == 'windows':
+                    native_dir = os.path.join(self.BASE_DIR, self.STORE_DIR, fdu_uuid, fdu.name)
+                    pid_file = os.path.join(self.BASE_DIR, self.STORE_DIR, fdu_uuid, fdu.name, instance_uuid)
+                    run_script = self.__generate_run_script(fdu.cmd, fdu.args, None, pid_file)
+                    self.logger.info('start_fdu()', '[ INFO ] PowerShell script is {}'.format(run_script))
+                    self.os.store_file(run_script, native_dir, '{}_run.ps1'.format(instance_uuid))
+                    cmd = '{}'.format(os.path.join(native_dir, '{}_run.ps1'.format(instance_uuid)))
+
+                self.logger.info('start_fdu()', 'Command is {}'.format(cmd))
+                process = self.__execute_command(cmd, fdu.outfile, d_env)
+                fdu.on_start(process.pid, process)
+
+            self.current_fdus.update({instance_uuid: fdu})
+            self.update_fdu_status(fdu_uuid, instance_uuid, 'RUN')
+            self.logger.info('start_fdu()', '[ DONE ] Native Plugin - Running BE uuid {}'.format(instance_uuid))
+            return True
 
 
-    def run_blocking_fdu(self, instance_uuid, unit):
+    def run_blocking_fdu(self, instance_uuid, env):
         try:
             self.logger.info('run_blocking_fdu()', ' Native Plugin - Running BE uuid {}'.format(instance_uuid))
+            self.logger.info('run_blocking_fdu()', ' Native Plugin - Environment {}'.format(env))
+
+            #  env is expected in format MYVAR=MYVALUE,MYVAR2=MYVALUE2,...
+            #  converting to dictionary
+            env = env.split(',')
+            d_env = {}
+            for e in env:
+                ev = e.split('=')
+                k = ev[0]
+                v = ev[1]
+                d_env.update({k:v})
+
             fdu = self.current_fdus.get(instance_uuid, None)
             if fdu is None:
                 self.logger.error('run_blocking_fdu()', 'Native Plugin - FDU not exists')
@@ -374,7 +471,7 @@ class Native(RuntimePluginFDU):
                         cmd = '{}'.format(os.path.join(native_dir, '{}_run.ps1'.format(instance_uuid)))
                     else:
                         cmd = ''
-                    process = self.__execute_command_blocking(cmd, fdu.outfile, pid_file)
+                    process = self.__execute_command_blocking(cmd, fdu.outfile, pid_file, d_envenv)
                     time.sleep(1)
                     # pid_file = os.path.join(self.BASE_DIR, self.STORE_DIR, fdu_uuid, fdu.name, pid_file)
                     pid = int(self.os.read_file(pid_file))
@@ -409,7 +506,7 @@ class Native(RuntimePluginFDU):
                         cmd = '{}'.format(os.path.join(native_dir, '{}_run.ps1'.format(instance_uuid)))
 
                     self.logger.info('run_blocking_fdu()', 'Command is {}'.format(cmd))
-                    process = self.__execute_command_blocking(cmd, fdu.outfile, pid_file)
+                    process = self.__execute_command_blocking(cmd, fdu.outfile, pid_file, d_env)
                     fdu.on_start(process.pid, process)
 
                 self.current_fdus.update({instance_uuid: fdu})
@@ -534,28 +631,28 @@ class Native(RuntimePluginFDU):
             self.connector.loc.actual.remove_node_fdu(self.node, self.uuid, fdu_uuid, instance_uuid)
 
 
-    def __execute_command(self, command, out_file):
+    def __execute_command(self, command, out_file, env={}):
         f = open(out_file, 'w')
         if self.operating_system.lower() == 'windows':
-            p = psutil.Popen(['PowerShell', '-File', command], shell=True, stdout=f, stderr=f, stdin=PIPE)
+            p = psutil.Popen(['PowerShell', '-File', command], shell=True, stdout=f, stderr=f, stdin=PIPE,env=dict(os.environ,**env))
         else:
             # cmd = 'sh -c {}'.format(command)
             cmd_splitted = command.split()
             self.logger.info('__execute_command()', 'CMD SPLIT = {}'.format(cmd_splitted))
-            p = psutil.Popen(cmd_splitted, shell=False, stdout=f, stderr=f, stdin=PIPE)
+            p = psutil.Popen(cmd_splitted, shell=False, stdout=f, stderr=f, stdin=PIPE,env=dict(os.environ,**env))
         self.logger.info('__execute_command()', 'PID = {}'.format(p.pid))
         return p
 
-    def __execute_command_blocking(self, command, out_file, pidfile):
+    def __execute_command_blocking(self, command, out_file, pidfile, env={}):
         f = open(out_file, 'w')
         f_pid = open(pidfile,'w+')
         if self.operating_system.lower() == 'windows':
-            p = psutil.Popen(['PowerShell', '-File', command], shell=True, stdout=f, stderr=f, stdin=PIPE)
+            p = psutil.Popen(['PowerShell', '-File', command], shell=True, stdout=f, stderr=f, stdin=PIPE,env=dict(os.environ,**env))
         else:
             # cmd = 'sh -c {}'.format(command)
             cmd_splitted = command.split()
             self.logger.info('__execute_command_blocking()', 'CMD SPLIT = {}'.format(cmd_splitted))
-            p = psutil.Popen(cmd_splitted, shell=False, stdout=f, stderr=f, stdin=PIPE)
+            p = psutil.Popen(cmd_splitted, shell=False, stdout=f, stderr=f, stdin=PIPE,env=dict(os.environ,**env))
         self.logger.info('__execute_command_blocking()', 'PID = {}'.format(p.pid))
 
         f_pid.write('{}'.format(p.pid))

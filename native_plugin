@@ -424,7 +424,7 @@ class Native(RuntimePluginFDU):
             self.current_fdus.update({instance_uuid: fdu})
             self.update_fdu_status(fdu_uuid, instance_uuid, 'RUN')
             self.logger.info('start_fdu()', '[ DONE ] Native Plugin - Running BE uuid {}'.format(instance_uuid))
-            return True
+            return {'result':fdu.to_json()}
 
 
     def run_blocking_fdu(self, instance_uuid, env):

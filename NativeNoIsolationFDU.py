@@ -17,7 +17,7 @@ import os
 from fog05_sdk.interfaces.States import State
 from fog05_sdk.interfaces.InfraFDU import InfraFDU
 
-class NativeFDU(InfraFDU):
+class NativeNoIsolationFDU(InfraFDU):
     def __init__(self, data):
         super(NativeFDU, self).__init__(data)
 
